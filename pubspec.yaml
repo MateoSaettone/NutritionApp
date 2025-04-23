@@ -13,6 +13,11 @@ dependencies:
   provider: ^6.0.3
   fl_chart: ^0.55.1
   intl: ^0.17.0
+  
+  # For Fitbit integration
+  url_launcher: ^6.2.5
+  http: ^0.13.6
+  uni_links: ^0.5.1
 
 dev_dependencies:
   flutter_test:
@@ -22,4 +27,4 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/images/ 
+    - assets/images/

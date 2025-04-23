@@ -40,4 +40,4 @@ bolt_app/
 ## Requirements
 
 - Flutter 3.0.0 or higher
-- Dart 2.17.0 or higher 
+- Dart 2.17.0 or higher
