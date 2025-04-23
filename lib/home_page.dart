@@ -24,12 +24,7 @@ class _HomePageState extends State<HomePage> {
   String? steps;
   String? _accessToken;
 
-  // Survey controllers
-  final _dietaryCtrl = TextEditingController();
-  final _moodCtrl    = TextEditingController();
-  final _energyCtrl  = TextEditingController();
-
-  // Fitbit OAuth info
+  // OAuth info
   final clientId    = '23QDNH';
   final redirectUri = 'http://localhost:8080';
 
@@ -37,14 +32,6 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _initFitbitConnection();
-  }
-
-  @override
-  void dispose() {
-    _dietaryCtrl.dispose();
-    _moodCtrl.dispose();
-    _energyCtrl.dispose();
-    super.dispose();
   }
 
   Future<void> _initFitbitConnection() async {
@@ -81,10 +68,10 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _fetchSteps(String accessToken) async {
+  Future<void> _fetchSteps(String token) async {
     final res = await http.get(
       Uri.parse('https://api.fitbit.com/1/user/-/activities/steps/date/today/1d.json'),
-      headers: {'Authorization': 'Bearer $accessToken'},
+      headers: {'Authorization': 'Bearer $token'},
     );
     if (res.statusCode == 200) {
       final data = json.decode(res.body);
@@ -92,125 +79,137 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _syncNow() async {
-    if (_accessToken == null) return;
-    await _fetchSteps(_accessToken!);
-    await _firestore.collection('fitbit_data').add({
-      'metric':    'steps',
-      'value':     steps,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Synced steps to Firestore!')),
-    );
-  }
-
-  Future<void> _submitSurvey() async {
-    final dietary = _dietaryCtrl.text.trim();
-    final mood    = int.tryParse(_moodCtrl.text.trim());
-    final energy  = int.tryParse(_energyCtrl.text.trim());
-
-    if (dietary.isEmpty || mood == null || energy == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete all survey fields.')),
-      );
-      return;
-    }
-
-    await _firestore.collection('survey_responses').add({
-      'dietaryHabits': dietary,
-      'moodRating':    mood,
-      'energyLevel':   energy,
-      'timestamp':     FieldValue.serverTimestamp(),
-    });
-
-    _dietaryCtrl.clear();
-    _moodCtrl.clear();
-    _energyCtrl.clear();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Survey submitted!')),
-    );
-  }
-
   Future<void> _signOut() async {
     await _auth.signOut();
     await _secureStorage.delete(key: 'fitbit_token');
+    // After sign-out, AuthGate will redirect to login.
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Nutrition App'),
+        title: const Text('Nutrition Dashboard'),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
-            onPressed: _signOut,
             tooltip: 'Sign Out',
-          ),
+            onPressed: _signOut,
+          )
         ],
       ),
-      body: SingleChildScrollView(
+      drawer: Drawer(
+        child: Column(
+          children: [
+            DrawerHeader(
+              decoration: const BoxDecoration(color: Colors.blue),
+              child: Row(
+                children: const [
+                  Icon(Icons.fastfood, color: Colors.white, size: 36),
+                  SizedBox(width: 12),
+                  Text('NutritionApp',
+                      style: TextStyle(color: Colors.white, fontSize: 24)),
+                ],
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.home),
+              title: const Text('Home'),
+              onTap: () {
+                Navigator.pop(context); // back to home
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.show_chart),
+              title: const Text('Metrics'),
+              onTap: () {
+                // TODO: route to Metrics page
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.assignment),
+              title: const Text('Surveys'),
+              onTap: () {
+                // TODO: route to Survey page
+              },
+            ),
+            const Spacer(),
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Text('v1.0.0',
+                  style: TextStyle(color: Colors.grey.shade600)),
+            )
+          ],
+        ),
+      ),
+      body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            const Text("Firebase Initialized! 🚀"),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: fitbitConnected ? null : _connectToFitbit,
-              child: Text(
-                fitbitConnected && steps != null
-                    ? "Connected to Fitbit ✅"
-                    : "Connect to Fitbit",
+            // Connection & Sync Row
+            Row(
+              children: [
+                ElevatedButton.icon(
+                  onPressed: fitbitConnected ? null : _connectToFitbit,
+                  icon: const Icon(Icons.favorite),
+                  label: Text(fitbitConnected ? 'Fitbit Connected' : 'Connect Fitbit'),
+                ),
+                const SizedBox(width: 16),
+                if (fitbitConnected)
+                  Chip(
+                    label: Text('Steps: ${steps ?? '-'}'),
+                    avatar: const Icon(Icons.directions_walk, size: 20),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 24),
+
+            // Grid of placeholder charts
+            Expanded(
+              child: GridView.count(
+                crossAxisCount: 2,
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
+                children: [
+                  _buildChartCard('Daily Steps', Icons.directions_walk),
+                  _buildChartCard('Sleep Quality', Icons.bedtime),
+                  _buildChartCard('Heart Rate Variability', Icons.favorite_border),
+                  _buildChartCard('Stress & Recovery', Icons.self_improvement),
+                ],
               ),
             ),
-            if (fitbitConnected && steps != null) ...[
-              const SizedBox(height: 20),
-              Text("Steps Today: $steps 🏃"),
-            ],
-            const SizedBox(height: 30),
-            ElevatedButton.icon(
-              onPressed: fitbitConnected ? _syncNow : null,
-              icon: const Icon(Icons.sync),
-              label: const Text("Sync Now to Firestore"),
-            ),
-            const Divider(height: 40),
-            const Text(
-              'Daily Wellness Survey',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChartCard(String title, IconData icon) {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(icon, color: Colors.blue),
+              const SizedBox(width: 8),
+              Text(title,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ]),
             const SizedBox(height: 12),
-            TextField(
-              controller: _dietaryCtrl,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Describe your dietary habits today',
+            // Placeholder for actual chart
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Center(child: Text('Chart goes here')),
               ),
-              maxLines: 2,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _moodCtrl,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Mood rating (1–10)',
-              ),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _energyCtrl,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Energy level (1–10)',
-              ),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _submitSurvey,
-              child: const Text('Submit Survey'),
             ),
           ],
         ),
