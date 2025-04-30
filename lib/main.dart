@@ -1,4 +1,5 @@
 // lib/main.dart
+// flutter run -d web-server --web-port=8080 --web-hostname=localhost
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';

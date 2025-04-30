@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Authentication complete</title>
+</head>
+<body>
+  <p>Authentication is complete. This window should close automatically.</p>
+  <script>
+    window.onload = function() {
+      // Send the URL back to the main window
+      if (window.opener) {
+        window.opener.postMessage({
+          'fitbit-auth': window.location.href
+        }, window.location.origin);
+        // Close this window
+        window.close();
+      } else {
+        document.body.innerHTML = 'Authentication complete. You can close this window and return to the app.';
+      }
+    };
+  </script>
+</body>
+</html>

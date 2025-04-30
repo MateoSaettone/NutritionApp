@@ -1,13 +1,15 @@
 // lib/home_page.dart
+// run with:
+// flutter run -d web-server --web-port=8080 --web-hostname=localhost
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:js' as js;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -16,73 +18,199 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final _auth          = FirebaseAuth.instance;
-  final _secureStorage = const FlutterSecureStorage();
-  final _firestore     = FirebaseFirestore.instance;
+  final _auth = FirebaseAuth.instance;
+  final _firestore = FirebaseFirestore.instance;
 
   bool fitbitConnected = false;
+  bool isAuthenticating = false;
   String? steps;
   String? _accessToken;
+  String? _authError;
 
   // OAuth info
-  final clientId    = '23QDNH';
-  final redirectUri = 'http://localhost:8080';
+  final clientId = '23Q8PL';
+  final redirectUri = 'http://localhost:8080/auth.html';
 
   @override
   void initState() {
     super.initState();
-    _initFitbitConnection();
+    _setupAuthListener();
+    _checkStoredToken();
   }
 
-  Future<void> _initFitbitConnection() async {
-    final fragment = Uri.base.fragment;
-    if (fragment.contains('access_token=')) {
-      final token = fragment
-          .split('&')
-          .firstWhere((p) => p.startsWith('access_token='))
-          .substring('access_token='.length);
-      await _secureStorage.write(key: 'fitbit_token', value: token);
-      _accessToken = token;
-      await _fetchSteps(token);
-      setState(() => fitbitConnected = true);
-      return;
-    }
-    final stored = await _secureStorage.read(key: 'fitbit_token');
-    if (stored != null) {
-      _accessToken = stored;
-      await _fetchSteps(stored);
-      setState(() => fitbitConnected = true);
+  void _setupAuthListener() {
+    // Set up a JavaScript listener for the OAuth callback
+    js.context['handleFitbitAuth'] = (dynamic result) {
+      if (result != null && result.toString().contains('access_token=')) {
+        _processAuthResult(result.toString());
+      }
+    };
+
+    // Listen for postMessage from the auth popup
+    html.window.addEventListener('message', (event) {
+      final html.MessageEvent e = event as html.MessageEvent;
+      if (e.origin == html.window.location.origin) {
+        try {
+          final data = e.data;
+          if (data is Map && data.containsKey('fitbit-auth')) {
+            final authUrl = data['fitbit-auth'];
+            _processAuthResult(authUrl);
+          }
+        } catch (e) {
+          // Handle error
+        }
+      }
+    });
+  }
+
+  void _processAuthResult(String authUrl) {
+    // Extract access token from the URL
+    if (authUrl.contains('access_token=')) {
+      final uri = Uri.parse(authUrl.replaceFirst('#', '?'));
+      final accessToken = uri.queryParameters['access_token'];
+      
+      if (accessToken != null) {
+        _storeTokenAndFetchData(accessToken);
+      } else {
+        setState(() {
+          isAuthenticating = false;
+          _authError = 'Failed to extract access token';
+        });
+      }
+    } else {
+      setState(() {
+        isAuthenticating = false;
+        _authError = 'No access token found in response';
+      });
     }
   }
 
-  void _connectToFitbit() async {
+  Future<void> _checkStoredToken() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('fitbit_token');
+      
+      if (token != null && token.isNotEmpty) {
+        _accessToken = token;
+        
+        try {
+          await _fetchSteps(token);
+          setState(() {
+            fitbitConnected = true;
+          });
+        } catch (e) {
+          await prefs.remove('fitbit_token');
+        }
+      }
+    } catch (e) {
+      // Handle error
+    }
+  }
+
+  void _connectToFitbit() {
+    setState(() {
+      isAuthenticating = true;
+      _authError = null;
+    });
+    
+    // Generate a unique state parameter
+    final state = DateTime.now().millisecondsSinceEpoch.toString();
+    
+    // Construct OAuth URL with necessary scopes
     final authUrl = Uri.https('www.fitbit.com', '/oauth2/authorize', {
       'response_type': 'token',
       'client_id': clientId,
       'redirect_uri': redirectUri,
-      'scope': 'activity heartrate nutrition profile sleep',
+      'scope': 'activity profile',
       'expires_in': '604800',
-    });
-    if (await canLaunchUrl(authUrl)) {
-      await launchUrl(authUrl, mode: LaunchMode.externalApplication);
+      'state': state,
+    }).toString();
+    
+    // Open the auth URL in a new window
+    final authWindow = html.window.open(
+      authUrl,
+      'fitbit_auth',
+      'width=800,height=600,menubar=no,toolbar=no,location=no'
+    );
+    
+    // If popup blocker prevents opening, fallback to redirecting current window
+    if (authWindow == null) {
+      html.window.location.href = authUrl;
+    }
+  }
+
+  Future<void> _storeTokenAndFetchData(String token) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('fitbit_token', token);
+      
+      _accessToken = token;
+      
+      // Fetch data
+      await _fetchSteps(token);
+      
+      setState(() {
+        fitbitConnected = true;
+        isAuthenticating = false;
+      });
+    } catch (e) {
+      setState(() {
+        isAuthenticating = false;
+        _authError = 'Error: $e';
+      });
     }
   }
 
   Future<void> _fetchSteps(String token) async {
-    final res = await http.get(
-      Uri.parse('https://api.fitbit.com/1/user/-/activities/steps/date/today/1d.json'),
-      headers: {'Authorization': 'Bearer $token'},
-    );
-    if (res.statusCode == 200) {
-      final data = json.decode(res.body);
-      setState(() => steps = data['activities-steps'][0]['value']);
+    try {
+      final response = await http.get(
+        Uri.parse('https://api.fitbit.com/1/user/-/activities/steps/date/today/1d.json'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
+      );
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        setState(() {
+          steps = data['activities-steps'][0]['value'];
+          fitbitConnected = true;
+        });
+      } else if (response.statusCode == 401) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('fitbit_token');
+        setState(() {
+          fitbitConnected = false;
+          _authError = 'Authentication expired. Please reconnect.';
+        });
+      } else {
+        setState(() {
+          steps = 'No data';
+          fitbitConnected = true;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        steps = 'Not available';
+        fitbitConnected = true;
+        _authError = null;
+      });
     }
   }
 
   Future<void> _signOut() async {
     await _auth.signOut();
-    await _secureStorage.delete(key: 'fitbit_token');
-    // After sign-out, AuthGate will redirect to login.
+    
+    // Clear Fitbit token
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('fitbit_token');
+    
+    setState(() {
+      fitbitConnected = false;
+      steps = null;
+      _accessToken = null;
+    });
   }
 
   @override
@@ -150,9 +278,13 @@ class _HomePageState extends State<HomePage> {
             Row(
               children: [
                 ElevatedButton.icon(
-                  onPressed: fitbitConnected ? null : _connectToFitbit,
+                  onPressed: fitbitConnected || isAuthenticating ? null : _connectToFitbit,
                   icon: const Icon(Icons.favorite),
-                  label: Text(fitbitConnected ? 'Fitbit Connected' : 'Connect Fitbit'),
+                  label: Text(
+                    isAuthenticating 
+                      ? 'Connecting...' 
+                      : (fitbitConnected ? 'Fitbit Connected' : 'Connect Fitbit')
+                  ),
                 ),
                 const SizedBox(width: 16),
                 if (fitbitConnected)
@@ -162,8 +294,17 @@ class _HomePageState extends State<HomePage> {
                   ),
               ],
             ),
+            
+            if (_authError != null) ...[
+              const SizedBox(height: 16),
+              Text(
+                _authError!,
+                style: TextStyle(color: Colors.red.shade700),
+              ),
+            ],
+            
             const SizedBox(height: 24),
-
+            
             // Grid of placeholder charts
             Expanded(
               child: GridView.count(
