@@ -1,12 +1,9 @@
 name: nutritionapp
 description: "A new Flutter project."
 publish_to: 'none'
-
 version: 1.0.0+1
-
 environment:
   sdk: ^3.7.2
-
 dependencies:
   flutter:
     sdk: flutter
@@ -16,22 +13,19 @@ dependencies:
   flutter_secure_storage: ^10.0.0-beta.4
   shared_preferences: ^2.2.0 
   cloud_firestore: ^5.6.6
-
   # Needed for web support
   js: ^0.7.2
-
   # For Fitbit OAuth + HTTP requests
   http: ^1.3.0
   url_launcher: ^6.2.5
   uni_links: ^0.5.1
-
+  # For date and number formatting
+  intl: ^0.18.1
   # iOS style icons
   cupertino_icons: ^1.0.8
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
-
 flutter:
   uses-material-design: true
