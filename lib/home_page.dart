@@ -864,7 +864,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Health Dashboard'),
+        title: Row(
+          children: [
+            Image.asset(
+              'assets/logo.png',
+              height: 40, // Adjust height as needed
+              fit: BoxFit.contain,
+            ),
+            const SizedBox(width: 8),
+            const Text('Health Dashboard'),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
