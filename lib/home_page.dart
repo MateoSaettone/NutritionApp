@@ -646,110 +646,120 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     Navigator.pushNamed(context, '/insights');
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Nutrition Dashboard'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh Data',
-            onPressed: fitbitConnected ? _refreshFitbitData : null,
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Sign Out',
-            onPressed: _signOut,
-          ),
-        ],
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: _timePeriods.map((period) => Tab(text: period)).toList(),
-        ),
-      ),
-      drawer: Drawer(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            DrawerHeader(
-              decoration: const BoxDecoration(color: Colors.blue),
-              child: Row(
-                children: const [
-                  Icon(Icons.fastfood, color: Colors.white, size: 36),
-                  SizedBox(width: 12),
-                  Text('NutritionApp',
-                      style: TextStyle(color: Colors.white, fontSize: 24)),
-                ],
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.home),
-              title: const Text('Home'),
-              onTap: () {
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.calendar_today),
-              title: const Text('Daily Report'),
-              onTap: () {
-                Navigator.pop(context);
-                _navigateToDailyReport();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.bar_chart),
-              title: const Text('Weekly Summary'),
-              onTap: () {
-                Navigator.pop(context);
-                _navigateToWeeklySummary();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.show_chart),
-              title: const Text('Stats & Charts'),
-              onTap: () {
-                Navigator.pop(context);
-                _navigateToStats();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.lightbulb),
-              title: const Text('Insights'),
-              onTap: () {
-                Navigator.pop(context);
-                _navigateToInsights();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.assignment),
-              title: const Text('Daily Survey'),
-              onTap: () {
-                Navigator.pop(context);
-                _navigateToSurvey();
-              },
-            ),
-          ],
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
+@override
+Widget build(BuildContext context) {
+  return Scaffold(
+    appBar: AppBar(
+      title: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          _buildDailyView(),
-          _buildWeeklyView(),
-          _buildMonthlyView(),
+          Image.asset(
+            'assets/logo.png',
+            height: 56,
+          ),
+          const SizedBox(width: 32),
+          const Text('Nutrition Dashboard'),
         ],
       ),
-      floatingActionButton: fitbitConnected
-          ? FloatingActionButton(
-              onPressed: _navigateToInsights,
-              tooltip: 'View Insights',
-              child: const Icon(Icons.lightbulb_outline),
-            )
-          : null,
-    );
-  }
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.refresh),
+          tooltip: 'Refresh Data',
+          onPressed: fitbitConnected ? _refreshFitbitData : null,
+        ),
+        IconButton(
+          icon: const Icon(Icons.logout),
+          tooltip: 'Sign Out',
+          onPressed: _signOut,
+        ),
+      ],
+      bottom: TabBar(
+        controller: _tabController,
+        tabs: _timePeriods.map((period) => Tab(text: period)).toList(),
+      ),
+    ),
+    drawer: Drawer(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          DrawerHeader(
+            decoration: const BoxDecoration(color: Colors.blue),
+            child: Row(
+              children: const [
+                Icon(Icons.fastfood, color: Colors.white, size: 36),
+                SizedBox(width: 12),
+                Text('NutritionApp',
+                    style: TextStyle(color: Colors.white, fontSize: 24)),
+              ],
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.home),
+            title: const Text('Home'),
+            onTap: () {
+              Navigator.pop(context);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.calendar_today),
+            title: const Text('Daily Report'),
+            onTap: () {
+              Navigator.pop(context);
+              _navigateToDailyReport();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.bar_chart),
+            title: const Text('Weekly Summary'),
+            onTap: () {
+              Navigator.pop(context);
+              _navigateToWeeklySummary();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.show_chart),
+            title: const Text('Stats & Charts'),
+            onTap: () {
+              Navigator.pop(context);
+              _navigateToStats();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.lightbulb),
+            title: const Text('Insights'),
+            onTap: () {
+              Navigator.pop(context);
+              _navigateToInsights();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.assignment),
+            title: const Text('Daily Survey'),
+            onTap: () {
+              Navigator.pop(context);
+              _navigateToSurvey();
+            },
+          ),
+        ],
+      ),
+    ),
+    body: TabBarView(
+      controller: _tabController,
+      children: [
+        _buildDailyView(),
+        _buildWeeklyView(),
+        _buildMonthlyView(),
+      ],
+    ),
+    floatingActionButton: fitbitConnected
+        ? FloatingActionButton(
+            onPressed: _navigateToInsights,
+            tooltip: 'View Insights',
+            child: const Icon(Icons.lightbulb_outline),
+          )
+        : null,
+  );
+}
 
   Widget _buildDailyView() {
     return SingleChildScrollView(
