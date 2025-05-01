@@ -10,9 +10,11 @@ import 'firebase_options.dart';
 import 'login_page.dart';
 import 'home_page.dart';
 import 'sign_up_page.dart';
-import 'daily_report_page.dart';  // Import new pages
+import 'daily_report_page.dart';
 import 'survey_page.dart';
 import 'weekly_summary_page.dart';
+import 'stats_page.dart';
+import 'insights_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,9 +50,11 @@ class MyApp extends StatelessWidget {
         '/login': (c) => const LoginPage(),
         '/signup': (c) => const SignUpPage(),
         '/home': (c) => const HomePage(),
-        '/daily_report': (c) => const DailyReportPage(),  // Add routes for new pages
+        '/daily_report': (c) => const DailyReportPage(),
         '/survey': (c) => const SurveyPage(),
         '/weekly_summary': (c) => const WeeklySummaryPage(),
+        '/stats': (c) => const StatsPage(),
+        '/insights': (c) => const InsightsPage(),
       },
     );
   }
