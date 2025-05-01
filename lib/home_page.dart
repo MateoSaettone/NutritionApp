@@ -9,9 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'web_helper.dart';
-import 'daily_report_page.dart';
-import 'stats_page.dart';
-import 'insights_page.dart';
+import 'mock_data_provider.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
@@ -29,6 +27,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   bool isAuthenticating = false;
   bool isLoadingData = false;
   bool _isHoveringFitbitButton = false;
+  
+  // Mock data state
+  bool useMockData = false;
+  String? mockDataMessage;
   
   // User data
   String? steps;
@@ -73,24 +75,27 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     WebHelper.setupAuthListener(_processAuthResult);
   }
 
-  void _processAuthResult(String authUrl) {
-    // Extract access token from the URL
-    if (authUrl.contains('access_token=')) {
-      final uri = Uri.parse(authUrl.replaceFirst('#', '?'));
+  void _processAuthResult(String? authUrl) {
+    // Instead of assuming authUrl is non-null
+    final safeAuthUrl = authUrl ?? '';
+    
+    if (safeAuthUrl.contains('access_token=')) {
+      final uri = Uri.parse(safeAuthUrl.replaceFirst('#', '?'));
       final accessToken = uri.queryParameters['access_token'];
-
       if (accessToken != null) {
         _storeTokenAndFetchData(accessToken);
       } else {
         setState(() {
           isAuthenticating = false;
           _authError = 'Failed to extract access token';
+          _useMockData('Failed to extract access token. Using sample data.');
         });
       }
     } else {
       setState(() {
         isAuthenticating = false;
         _authError = 'No access token found in response';
+        _useMockData('Authentication failed. Using sample data.');
       });
     }
   }
@@ -99,6 +104,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     try {
       setState(() {
         isLoadingData = true;
+        useMockData = false;
+        mockDataMessage = null;
       });
 
       final prefs = await SharedPreferences.getInstance();
@@ -114,22 +121,24 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             isLoadingData = false;
           });
         } catch (e) {
+          print('Error loading Fitbit data: $e');
           await prefs.remove('fitbit_token');
-          setState(() {
-            fitbitConnected = false;
-            isLoadingData = false;
-            _authError = 'Error loading Fitbit data: $e';
-          });
+          _useMockData('Error loading Fitbit data: $e');
         }
       } else {
         setState(() {
           isLoadingData = false;
+          // No token, but not an error
+          fitbitConnected = false;
         });
       }
     } catch (e) {
+      print('Error checking stored token: $e');
       setState(() {
         isLoadingData = false;
         _authError = 'Error checking stored token: $e';
+        // Use mock data as fallback
+        _useMockData('Error checking token. Using sample data.');
       });
     }
   }
@@ -138,6 +147,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     setState(() {
       isAuthenticating = true;
       _authError = null;
+      useMockData = false;
+      mockDataMessage = null;
     });
 
     final state = DateTime.now().millisecondsSinceEpoch.toString();
@@ -196,6 +207,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           _accessToken = null;
           _authError = null;
           _chartsInitialized = false;
+          useMockData = false;
+          mockDataMessage = null;
         });
 
         // Show success snackbar
@@ -215,10 +228,45 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
   }
 
+  // Handle failure gracefully with mock data
+  void _useMockData(String message) {
+    setState(() {
+      useMockData = true;
+      mockDataMessage = message;
+      isAuthenticating = false;
+      isLoadingData = false;
+      
+      // Load mock activity data
+      final mockActivityData = MockDataProvider.getMockStepsData();
+      steps = mockActivityData['steps'];
+      caloriesBurned = mockActivityData['caloriesBurned'];
+      activeMinutes = mockActivityData['activeMinutes'];
+      
+      // Load mock heart rate data
+      final mockHrData = MockDataProvider.getMockHeartRateData();
+      heartRate = mockHrData['restingHR'];
+      
+      // Load mock sleep data
+      final mockSleepData = MockDataProvider.getMockSleepData();
+      sleepDuration = mockSleepData['duration'];
+      deepSleepPercentage = mockSleepData['deepSleep'];
+      
+      // Load mock exercise data
+      recentExercises = MockDataProvider.getMockExerciseData();
+      
+      // Generate mock chart data
+      _heartRateData = MockDataProvider.getMockHeartRateChartData(24);
+      _stepsData = MockDataProvider.getMockStepsChartData(7);
+      _chartsInitialized = true;
+    });
+  }
+
   Future<void> _storeTokenAndFetchData(String token) async {
     try {
       setState(() {
         isLoadingData = true;
+        useMockData = false;
+        mockDataMessage = null;
       });
 
       final prefs = await SharedPreferences.getInstance();
@@ -233,10 +281,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       } catch (e) {
         // Continue even if data fetching fails
         print('Error fetching initial data: $e');
+        _useMockData('Error fetching Fitbit data: $e. Using sample data.');
       }
 
       setState(() {
-        fitbitConnected = true;
+        fitbitConnected = !useMockData; // Only set connected if not using mock data
         isAuthenticating = false;
         isLoadingData = false;
       });
@@ -244,10 +293,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       // Show success snackbar
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Successfully connected to Fitbit'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
+          SnackBar(
+            content: Text(useMockData 
+                ? 'Fitbit connection issues detected. Using sample data.' 
+                : 'Successfully connected to Fitbit'),
+            backgroundColor: useMockData ? Colors.orange : Colors.green,
+            duration: const Duration(seconds: 2),
           ),
         );
       }
@@ -256,6 +307,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         isAuthenticating = false;
         isLoadingData = false;
         _authError = 'Error: $e';
+        // Use mock data as fallback
+        _useMockData('Error connecting to Fitbit: $e. Using sample data.');
       });
     }
   }
@@ -264,9 +317,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     try {
       setState(() {
         isLoadingData = true;
+        _authError = null;
       });
 
       final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      bool hasDataErrors = false;
 
       try {
         // Fetch steps data
@@ -286,11 +341,18 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         } else if (stepsResponse.statusCode == 401) {
           // Handle authentication error
           throw Exception('Authentication expired');
+        } else {
+          print('Steps API error: ${stepsResponse.statusCode}');
+          hasDataErrors = true;
+          setState(() {
+            steps = MockDataProvider.getMockStepsData()['steps'];
+          });
         }
       } catch (e) {
         print('Error fetching steps: $e');
+        hasDataErrors = true;
         setState(() {
-          steps = 'Not available';
+          steps = MockDataProvider.getMockStepsData()['steps'];
         });
       }
 
@@ -309,11 +371,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           setState(() {
             caloriesBurned = data['activities-calories'][0]['value'];
           });
+        } else {
+          hasDataErrors = true;
+          setState(() {
+            caloriesBurned = MockDataProvider.getMockStepsData()['caloriesBurned'];
+          });
         }
       } catch (e) {
         print('Error fetching calories: $e');
+        hasDataErrors = true;
         setState(() {
-          caloriesBurned = 'Not available';
+          caloriesBurned = MockDataProvider.getMockStepsData()['caloriesBurned'];
         });
       }
 
@@ -332,11 +400,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           setState(() {
             activeMinutes = data['activities-minutesVeryActive'][0]['value'];
           });
+        } else {
+          hasDataErrors = true;
+          setState(() {
+            activeMinutes = MockDataProvider.getMockStepsData()['activeMinutes'];
+          });
         }
       } catch (e) {
         print('Error fetching active minutes: $e');
+        hasDataErrors = true;
         setState(() {
-          activeMinutes = 'Not available';
+          activeMinutes = MockDataProvider.getMockStepsData()['activeMinutes'];
         });
       }
 
@@ -363,11 +437,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               heartRate = 'N/A';
             });
           }
+        } else {
+          hasDataErrors = true;
+          setState(() {
+            heartRate = MockDataProvider.getMockHeartRateData()['restingHR'];
+          });
         }
       } catch (e) {
         print('Error fetching heart rate: $e');
+        hasDataErrors = true;
         setState(() {
-          heartRate = 'Not available';
+          heartRate = MockDataProvider.getMockHeartRateData()['restingHR'];
         });
       }
 
@@ -414,17 +494,25 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               deepSleepPercentage = '$deepSleepPercentageValue%';
             });
           } else {
+            hasDataErrors = true;
             setState(() {
-              sleepDuration = 'No sleep data';
-              deepSleepPercentage = 'N/A';
+              sleepDuration = MockDataProvider.getMockSleepData()['duration'];
+              deepSleepPercentage = '20%'; // Sample value
             });
           }
+        } else {
+          hasDataErrors = true;
+          setState(() {
+            sleepDuration = MockDataProvider.getMockSleepData()['duration'];
+            deepSleepPercentage = '20%'; // Sample value
+          });
         }
       } catch (e) {
         print('Error fetching sleep data: $e');
+        hasDataErrors = true;
         setState(() {
-          sleepDuration = 'Not available';
-          deepSleepPercentage = 'N/A';
+          sleepDuration = MockDataProvider.getMockSleepData()['duration'];
+          deepSleepPercentage = '20%'; // Sample value
         });
       }
 
@@ -446,33 +534,66 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 
             for (var activity in data['activities']) {
               if (activity['activityName'] != null) {
-                exercises.add({
-                  'name': activity['activityName'],
-                  'duration': activity['duration'] != null 
-                      ? (activity['duration'] / 60000).round() // Convert from milliseconds to minutes
-                      : 0,
-                  'calories': activity['calories'] ?? 0,
-                  'date': activity['startTime'] != null 
-                      ? DateTime.parse(activity['startTime']) 
-                      : DateTime.now(),
-                });
+                final String? startTimeStr = activity['startTime'];
+                // Add null check for startTime
+                if (startTimeStr != null && startTimeStr.isNotEmpty) {
+                  try {
+                    final DateTime activityDate = DateTime.parse(startTimeStr);
+                    
+                    exercises.add({
+                      'name': activity['activityName'],
+                      'duration': activity['duration'] != null 
+                          ? (activity['duration'] / 60000).round() // Convert from milliseconds to minutes
+                          : 0,
+                      'calories': activity['calories'] ?? 0,
+                      'date': activityDate,
+                    });
+                  } catch (e) {
+                    print('Error parsing date: $e');
+                    // Skip this activity if date parsing fails
+                  }
+                }
               }
             }
 
             setState(() {
               recentExercises = exercises;
             });
+          } else {
+            hasDataErrors = true;
+            setState(() {
+              recentExercises = MockDataProvider.getMockExerciseData();
+            });
           }
+        } else {
+          hasDataErrors = true;
+          setState(() {
+            recentExercises = MockDataProvider.getMockExerciseData();
+          });
         }
       } catch (e) {
         print('Error fetching exercise data: $e');
+        hasDataErrors = true;
+        setState(() {
+          recentExercises = MockDataProvider.getMockExerciseData();
+        });
+      }
+
+      // If any data errors occurred, update the mock data state
+      if (hasDataErrors) {
+        setState(() {
+          useMockData = true;
+          mockDataMessage = 'Some Fitbit data could not be loaded. Showing partial sample data.';
+        });
       }
 
       setState(() {
-        fitbitConnected = true;
+        fitbitConnected = !useMockData;
         isLoadingData = false;
       });
     } catch (e) {
+      print('Error in _fetchFitbitData: $e');
+      
       if (e.toString().contains('Authentication expired')) {
         final prefs = await SharedPreferences.getInstance();
         await prefs.remove('fitbit_token');
@@ -482,12 +603,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           _authError = 'Authentication expired. Please reconnect.';
         });
       } else {
-        setState(() {
-          isLoadingData = false;
-          _authError = 'Error fetching data: $e';
-          // Still consider connected even if data fetch fails
-          fitbitConnected = true;
-        });
+        // Use mock data for all values if there's a catastrophic error
+        _useMockData('Error fetching Fitbit data: $e. Using sample data.');
       }
     }
   }
@@ -498,66 +615,136 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       final today = DateFormat('yyyy-MM-dd').format(now);
       final weekAgo = DateFormat('yyyy-MM-dd').format(now.subtract(const Duration(days: 7)));
 
-      // Fetch heart rate data for the past week
-      final heartRateResponse = await http.get(
-        Uri.parse('https://api.fitbit.com/1/user/-/activities/heart/date/$weekAgo/$today/1d.json'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
-      );
+      bool hasChartErrors = false;
 
-      if (heartRateResponse.statusCode == 200) {
-        final data = json.decode(heartRateResponse.body);
-        final heartData = data['activities-heart'];
+      try {
+        // Fetch heart rate data for the past week
+        final heartRateResponse = await http.get(
+          Uri.parse('https://api.fitbit.com/1/user/-/activities/heart/date/$weekAgo/$today/1d.json'),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Accept': 'application/json',
+          },
+        );
 
-        // Create time series data
-        final List<FlSpot> hrData = [];
+        if (heartRateResponse.statusCode == 200) {
+          final data = json.decode(heartRateResponse.body);
+          final heartData = data['activities-heart'];
 
-        for (int i = 0; i < heartData.length; i++) {
-          final dayData = heartData[i];
-          final value = dayData['value'];
+          // Create time series data
+          final List<FlSpot> hrData = [];
 
-          if (value is Map && value.containsKey('restingHeartRate')) {
-            hrData.add(FlSpot(i.toDouble(), value['restingHeartRate'].toDouble()));
+          for (int i = 0; i < heartData.length; i++) {
+            final dayData = heartData[i];
+            final value = dayData['value'];
+
+            if (value is Map && value.containsKey('restingHeartRate')) {
+              hrData.add(FlSpot(i.toDouble(), value['restingHeartRate'].toDouble()));
+            }
           }
-        }
 
+          if (hrData.isNotEmpty) {
+            setState(() {
+              _heartRateData = hrData;
+            });
+          } else {
+            hasChartErrors = true;
+            setState(() {
+              _heartRateData = MockDataProvider.getMockHeartRateChartData(7);
+            });
+          }
+        } else {
+          hasChartErrors = true;
+          setState(() {
+            _heartRateData = MockDataProvider.getMockHeartRateChartData(7);
+          });
+        }
+      } catch (e) {
+        print('Error fetching heart rate chart data: $e');
+        hasChartErrors = true;
         setState(() {
-          _heartRateData = hrData;
+          _heartRateData = MockDataProvider.getMockHeartRateChartData(7);
         });
       }
 
-      // Fetch steps data for the past week
-      final stepsResponse = await http.get(
-        Uri.parse('https://api.fitbit.com/1/user/-/activities/steps/date/$weekAgo/$today/1d.json'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
-      );
+      try {
+        // Fetch steps data for the past week
+        final stepsResponse = await http.get(
+          Uri.parse('https://api.fitbit.com/1/user/-/activities/steps/date/$weekAgo/$today/1d.json'),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Accept': 'application/json',
+          },
+        );
 
-      if (stepsResponse.statusCode == 200) {
-        final data = json.decode(stepsResponse.body);
-        final stepsData = data['activities-steps'];
+        if (stepsResponse.statusCode == 200) {
+          final data = json.decode(stepsResponse.body);
+          final stepsData = data['activities-steps'];
 
-        // Create time series data
-        final List<FlSpot> stepsList = [];
+          // Create time series data
+          final List<FlSpot> stepsList = [];
 
-        for (int i = 0; i < stepsData.length; i++) {
-          final dayData = stepsData[i];
-          final value = int.parse(dayData['value']);
+          for (int i = 0; i < stepsData.length; i++) {
+            final dayData = stepsData[i];
+            final valueStr = dayData['value'];
+            if (valueStr != null) {
+              try {
+                final value = int.parse(valueStr.toString());
+                stepsList.add(FlSpot(i.toDouble(), value.toDouble()));
+              } catch (e) {
+                print('Error parsing steps value: $e');
+              }
+            }
+          }
 
-          stepsList.add(FlSpot(i.toDouble(), value.toDouble()));
+          if (stepsList.isNotEmpty) {
+            setState(() {
+              _stepsData = stepsList;
+            });
+          } else {
+            hasChartErrors = true;
+            setState(() {
+              _stepsData = MockDataProvider.getMockStepsChartData(7);
+            });
+          }
+        } else {
+          hasChartErrors = true;
+          setState(() {
+            _stepsData = MockDataProvider.getMockStepsChartData(7);
+          });
         }
-
+      } catch (e) {
+        print('Error fetching steps chart data: $e');
+        hasChartErrors = true;
         setState(() {
-          _stepsData = stepsList;
-          _chartsInitialized = true;
+          _stepsData = MockDataProvider.getMockStepsChartData(7);
         });
       }
+
+      // If any chart errors occurred, update the mock data state
+      if (hasChartErrors && !useMockData) {
+        setState(() {
+          useMockData = true;
+          mockDataMessage = 'Some chart data could not be loaded. Showing partial sample data.';
+        });
+      }
+
+      setState(() {
+        _chartsInitialized = true;
+      });
     } catch (e) {
       print('Error initializing chart data: $e');
+      // Use mock chart data as fallback
+      setState(() {
+        _heartRateData = MockDataProvider.getMockHeartRateChartData(7);
+        _stepsData = MockDataProvider.getMockStepsChartData(7);
+        _chartsInitialized = true;
+        
+        if (!useMockData) {
+          useMockData = true;
+          mockDataMessage = 'Error loading chart data. Using sample charts.';
+        }
+      });
     }
   }
 
@@ -581,6 +768,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (_accessToken != null) {
       setState(() {
         _authError = null;
+        isLoadingData = true;
+        useMockData = false;
+        mockDataMessage = null;
       });
 
       try {
@@ -590,44 +780,68 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         // Show success message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Data refreshed successfully'),
-              duration: Duration(seconds: 2),
+            SnackBar(
+              content: Text(useMockData 
+                  ? 'Some data could not be refreshed. Showing partial sample data.' 
+                  : 'Data refreshed successfully'),
+              backgroundColor: useMockData ? Colors.orange : Colors.green,
+              duration: const Duration(seconds: 2),
             ),
           );
         }
       } catch (e) {
         setState(() {
           _authError = 'Error refreshing data: $e';
+          // Use mock data as fallback
+          _useMockData('Error refreshing data: $e. Using sample data.');
         });
       }
+    } else {
+      // No token available, show message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please connect your Fitbit account first'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
   Future<void> _signOut() async {
-    await _auth.signOut();
+    try {
+      await _auth.signOut();
 
-    // Clear Fitbit token
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('fitbit_token');
+      // Clear Fitbit token
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('fitbit_token');
 
-    setState(() {
-      fitbitConnected = false;
-      steps = null;
-      caloriesBurned = null;
-      activeMinutes = null;
-      heartRate = null;
-      sleepDuration = null;
-      deepSleepPercentage = null;
-      _accessToken = null;
-    });
+      setState(() {
+        fitbitConnected = false;
+        steps = null;
+        caloriesBurned = null;
+        activeMinutes = null;
+        heartRate = null;
+        sleepDuration = null;
+        deepSleepPercentage = null;
+        _accessToken = null;
+        useMockData = false;
+        mockDataMessage = null;
+      });
+    } catch (e) {
+      print('Error signing out: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error signing out: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   void _navigateToDailyReport() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const DailyReportPage()),
-    );
+    Navigator.pushNamed(context, '/daily_report');
   }
 
   void _navigateToSurvey() {
@@ -646,120 +860,148 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     Navigator.pushNamed(context, '/insights');
   }
 
-@override
-Widget build(BuildContext context) {
-  return Scaffold(
-    appBar: AppBar(
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Image.asset(
-            'assets/logo.png',
-            height: 56,
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Health Dashboard'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh Data',
+            onPressed: isLoadingData ? null : _refreshFitbitData,
           ),
-          const SizedBox(width: 32),
-          const Text('Nutrition Dashboard'),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Sign Out',
+            onPressed: _signOut,
+          ),
         ],
-      ),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.refresh),
-          tooltip: 'Refresh Data',
-          onPressed: fitbitConnected ? _refreshFitbitData : null,
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: _timePeriods.map((period) => Tab(text: period)).toList(),
         ),
-        IconButton(
-          icon: const Icon(Icons.logout),
-          tooltip: 'Sign Out',
-          onPressed: _signOut,
-        ),
-      ],
-      bottom: TabBar(
-        controller: _tabController,
-        tabs: _timePeriods.map((period) => Tab(text: period)).toList(),
       ),
-    ),
-    drawer: Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          DrawerHeader(
-            decoration: const BoxDecoration(color: Colors.blue),
-            child: Row(
-              children: const [
-                Icon(Icons.fastfood, color: Colors.white, size: 36),
-                SizedBox(width: 12),
-                Text('NutritionApp',
-                    style: TextStyle(color: Colors.white, fontSize: 24)),
-              ],
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            DrawerHeader(
+              decoration: const BoxDecoration(color: Colors.blue),
+              child: Row(
+                children: const [
+                  Icon(Icons.fastfood, color: Colors.white, size: 36),
+                  SizedBox(width: 12),
+                  Text('Health Tracker',
+                      style: TextStyle(color: Colors.white, fontSize: 24)),
+                ],
+              ),
             ),
+            ListTile(
+              leading: const Icon(Icons.home),
+              title: const Text('Home'),
+              onTap: () {
+                Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.calendar_today),
+              title: const Text('Daily Report'),
+              onTap: () {
+                Navigator.pop(context);
+                _navigateToDailyReport();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.bar_chart),
+              title: const Text('Weekly Summary'),
+              onTap: () {
+                Navigator.pop(context);
+                _navigateToWeeklySummary();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.show_chart),
+              title: const Text('Stats & Charts'),
+              onTap: () {
+                Navigator.pop(context);
+                _navigateToStats();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.lightbulb),
+              title: const Text('Insights'),
+              onTap: () {
+                Navigator.pop(context);
+                _navigateToInsights();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.assignment),
+              title: const Text('Daily Survey'),
+              onTap: () {
+                Navigator.pop(context);
+                _navigateToSurvey();
+              },
+            ),
+          ],
+        ),
+      ),
+      body: Stack(
+        children: [
+          // Main content with tabs
+          TabBarView(
+            controller: _tabController,
+            children: [
+              _buildDailyView(),
+              _buildWeeklyView(),
+              _buildMonthlyView(),
+            ],
           ),
-          ListTile(
-            leading: const Icon(Icons.home),
-            title: const Text('Home'),
-            onTap: () {
-              Navigator.pop(context);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.calendar_today),
-            title: const Text('Daily Report'),
-            onTap: () {
-              Navigator.pop(context);
-              _navigateToDailyReport();
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.bar_chart),
-            title: const Text('Weekly Summary'),
-            onTap: () {
-              Navigator.pop(context);
-              _navigateToWeeklySummary();
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.show_chart),
-            title: const Text('Stats & Charts'),
-            onTap: () {
-              Navigator.pop(context);
-              _navigateToStats();
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.lightbulb),
-            title: const Text('Insights'),
-            onTap: () {
-              Navigator.pop(context);
-              _navigateToInsights();
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.assignment),
-            title: const Text('Daily Survey'),
-            onTap: () {
-              Navigator.pop(context);
-              _navigateToSurvey();
-            },
-          ),
+          
+          // Show warning banner if using mock data
+          if (useMockData && mockDataMessage != null)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+                color: Colors.amber.shade100,
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.amber.shade800, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        mockDataMessage!,
+                        style: TextStyle(color: Colors.amber.shade800, fontSize: 12),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      color: Colors.amber.shade800,
+                      onPressed: () {
+                        setState(() {
+                          mockDataMessage = null;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
-    ),
-    body: TabBarView(
-      controller: _tabController,
-      children: [
-        _buildDailyView(),
-        _buildWeeklyView(),
-        _buildMonthlyView(),
-      ],
-    ),
-    floatingActionButton: fitbitConnected
-        ? FloatingActionButton(
-            onPressed: _navigateToInsights,
-            tooltip: 'View Insights',
-            child: const Icon(Icons.lightbulb_outline),
-          )
-        : null,
-  );
-}
+      floatingActionButton: FloatingActionButton(
+        onPressed: _navigateToInsights,
+        tooltip: 'View Insights',
+        child: const Icon(Icons.lightbulb_outline),
+      ),
+    );
+  }
 
   Widget _buildDailyView() {
     return SingleChildScrollView(
@@ -843,7 +1085,7 @@ Widget build(BuildContext context) {
                     ),
                   ],
 
-                  if (fitbitConnected) ...[
+                  if (fitbitConnected || useMockData) ...[
                     const SizedBox(height: 24),
                     const Text(
                       'Today\'s Activity',
@@ -878,7 +1120,7 @@ Widget build(BuildContext context) {
             ),
           ),
 
-          if (fitbitConnected && recentExercises.isNotEmpty) ...[
+          if ((fitbitConnected || useMockData) && recentExercises.isNotEmpty) ...[
             const SizedBox(height: 24),
             Card(
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -917,7 +1159,7 @@ Widget build(BuildContext context) {
                                   ),
                                   Text(
                                     '${exercise['duration']} min • ${exercise['calories']} cal • '
-                                    '${DateFormat('MMM d').format(exercise['date'])}',
+                                    '${exercise['date'] != null ? DateFormat('MMM d').format(exercise['date']) : 'N/A'}',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: Colors.grey.shade700,
@@ -936,7 +1178,7 @@ Widget build(BuildContext context) {
             ),
           ],
 
-          if (fitbitConnected && _chartsInitialized) ...[
+          if ((fitbitConnected || useMockData) && _chartsInitialized) ...[
             const SizedBox(height: 24),
 
             // Heart rate quick chart
@@ -973,8 +1215,11 @@ Widget build(BuildContext context) {
                                   sideTitles: SideTitles(
                                     showTitles: true,
                                     getTitlesWidget: (value, meta) {
-                                      final day = DateTime.now().subtract(Duration(days: (7 - value.toInt())));
-                                      return Text(DateFormat('E').format(day));
+                                      if (value.toInt() >= 0 && value.toInt() < 7) {
+                                        final day = DateTime.now().subtract(Duration(days: (7 - value.toInt())));
+                                        return Text(DateFormat('E').format(day));
+                                      }
+                                      return const Text('');
                                     },
                                     reservedSize: 30,
                                   ),
@@ -1048,8 +1293,11 @@ Widget build(BuildContext context) {
                                   sideTitles: SideTitles(
                                     showTitles: true,
                                     getTitlesWidget: (value, meta) {
-                                      final day = DateTime.now().subtract(Duration(days: (7 - value.toInt())));
-                                      return Text(DateFormat('E').format(day));
+                                      if (value.toInt() >= 0 && value.toInt() < 7) {
+                                        final day = DateTime.now().subtract(Duration(days: (7 - value.toInt())));
+                                        return Text(DateFormat('E').format(day));
+                                      }
+                                      return const Text('');
                                     },
                                     reservedSize: 30,
                                   ),
@@ -1057,7 +1305,7 @@ Widget build(BuildContext context) {
                                 leftTitles: AxisTitles(
                                   sideTitles: SideTitles(
                                     showTitles: true,
-                                    reservedSize: 30,
+                                    reservedSize: 40,
                                   ),
                                 ),
                                 topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -1173,7 +1421,7 @@ Widget build(BuildContext context) {
                     ],
                   ),
 
-                  if (!fitbitConnected) ...[
+                  if (!fitbitConnected && !useMockData) ...[
                     const SizedBox(height: 24),
                     Center(
                       child: Column(
@@ -1216,7 +1464,7 @@ Widget build(BuildContext context) {
             ),
           ),
 
-          if (fitbitConnected && _chartsInitialized) ...[
+          if ((fitbitConnected || useMockData) && _chartsInitialized) ...[
             const SizedBox(height: 24),
 
             Card(
@@ -1254,8 +1502,11 @@ Widget build(BuildContext context) {
                                   sideTitles: SideTitles(
                                     showTitles: true,
                                     getTitlesWidget: (value, meta) {
-                                      final day = DateTime.now().subtract(Duration(days: (7 - value.toInt())));
-                                      return Text(DateFormat('E').format(day));
+                                      if (value.toInt() >= 0 && value.toInt() < 7) {
+                                        final day = DateTime.now().subtract(Duration(days: (7 - value.toInt())));
+                                        return Text(DateFormat('E').format(day));
+                                      }
+                                      return const Text('');
                                     },
                                     reservedSize: 30,
                                   ),
@@ -1263,7 +1514,7 @@ Widget build(BuildContext context) {
                                 leftTitles: AxisTitles(
                                   sideTitles: SideTitles(
                                     showTitles: true,
-                                    reservedSize: 30,
+                                    reservedSize: 40,
                                   ),
                                 ),
                                 topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -1311,8 +1562,11 @@ Widget build(BuildContext context) {
                                   sideTitles: SideTitles(
                                     showTitles: true,
                                     getTitlesWidget: (value, meta) {
-                                      final day = DateTime.now().subtract(Duration(days: (7 - value.toInt())));
-                                      return Text(DateFormat('E').format(day));
+                                      if (value.toInt() >= 0 && value.toInt() < 7) {
+                                        final day = DateTime.now().subtract(Duration(days: (7 - value.toInt())));
+                                        return Text(DateFormat('E').format(day));
+                                      }
+                                      return const Text('');
                                     },
                                     reservedSize: 30,
                                   ),
@@ -1436,7 +1690,7 @@ Widget build(BuildContext context) {
                     ],
                   ),
 
-                  if (!fitbitConnected) ...[
+                  if (!fitbitConnected && !useMockData) ...[
                     const SizedBox(height: 24),
                     Center(
                       child: Column(
@@ -1535,7 +1789,7 @@ Widget build(BuildContext context) {
                           const Icon(Icons.calendar_month, size: 48, color: Colors.grey),
                           const SizedBox(height: 16),
                           Text(
-                            fitbitConnected
+                            fitbitConnected || useMockData
                                 ? 'Calendar view coming soon'
                                 : 'Connect Fitbit to see your activity calendar',
                             style: TextStyle(color: Colors.grey.shade700),
@@ -1617,7 +1871,35 @@ Widget build(BuildContext context) {
       ),
     );
   }
-
+  
+  Widget _buildHeartRateValue(String label, String value) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.grey.shade700,
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const Text(
+          'bpm',
+          style: TextStyle(
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+  
   Widget _buildMonthlyMetric(String label, String value, IconData icon, Color color, String change, bool isPositive) {
     return Container(
       padding: const EdgeInsets.all(12),

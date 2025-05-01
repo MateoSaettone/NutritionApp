@@ -192,26 +192,29 @@ class _StatsPageState extends State<StatsPage> with SingleTickerProviderStateMix
         for (int i = 0; i < stepsData.length; i++) {
           final entry = stepsData[i];
           final steps = double.parse(entry['value']);
-          final day = DateFormat('yyyy-MM-dd').parse(entry['dateTime']);
+          final String? dateTimeStr = entry['dateTime'];
+          DateTime? currentDay;
+          if (dateTimeStr != null && dateTimeStr.isNotEmpty) {
+            currentDay = DateFormat('yyyy-MM-dd').parse(dateTimeStr);
+          }
           
           // Add to chart data
           chartData['steps']?.add(FlSpot(i.toDouble(), steps));
           
-          // Update stats
-          total += steps;
-          
-          if (steps > max) {
-            max = steps;
-            maxDay = DateFormat('EEE, MMM d').format(day);
-          }
-          
-          if (steps < min) {
-            min = steps;
-            minDay = DateFormat('EEE, MMM d').format(day);
-          }
-          
-          if (steps >= goalSteps) {
-            daysAboveGoal++;
+          // Update stats if we have a valid date
+          if (currentDay != null) {
+            total += steps;
+            if (steps > max) {
+              max = steps;
+              maxDay = DateFormat('EEE, MMM d').format(currentDay);
+            }
+            if (steps < min) {
+              min = steps;
+              minDay = DateFormat('EEE, MMM d').format(currentDay);
+            }
+            if (steps >= goalSteps) {
+              daysAboveGoal++;
+            }
           }
         }
         

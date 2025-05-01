@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:fl_chart/fl_chart.dart';
+import 'mock_data_provider.dart'; // Import our mock data provider
 
 class DailyReportPage extends StatefulWidget {
   const DailyReportPage({Key? key}) : super(key: key);
@@ -33,6 +34,7 @@ class _DailyReportPageState extends State<DailyReportPage> {
   DateTime selectedDate = DateTime.now();
   bool isLoading = true;
   String? accessToken;
+  bool useMockData = false;
   
   // Activity data
   Map<String, dynamic> fitbitData = {
@@ -83,6 +85,10 @@ class _DailyReportPageState extends State<DailyReportPage> {
 
   Future<void> _loadFitbitToken() async {
     try {
+      setState(() {
+        isLoading = true;
+      });
+      
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('fitbit_token');
       
@@ -91,149 +97,172 @@ class _DailyReportPageState extends State<DailyReportPage> {
       });
       
       if (token != null) {
-        await _fetchDailyData(token);
+        try {
+          await _fetchDailyData(token);
+        } catch (e) {
+          // If fetching data fails, use mock data as fallback
+          _useMockData('Error connecting to Fitbit API: $e');
+        }
       } else {
-        setState(() {
-          isLoading = false;
-          errorMessage = 'Please connect your Fitbit to view daily reports';
-        });
+        // Use mock data if no token is available
+        _useMockData('No Fitbit connection available. Showing sample data.');
       }
     } catch (e) {
-      setState(() {
-        isLoading = false;
-        errorMessage = 'Error loading data: $e';
-      });
+      // Use mock data if there's an error
+      _useMockData('Error loading data: $e');
     }
+  }
+
+  void _useMockData(String message) {
+    setState(() {
+      useMockData = true;
+      fitbitData = MockDataProvider.getMockStepsData();
+      heartRateData = MockDataProvider.getMockHeartRateData();
+      sleepData = MockDataProvider.getMockSleepData();
+      exerciseData = MockDataProvider.getMockExerciseData();
+      
+      // Generate chart data
+      heartRateChartData = MockDataProvider.getMockHeartRateChartData(24);
+      sleepChartData = MockDataProvider.getMockSleepPieChartData();
+      
+      errorMessage = message;
+      isLoading = false;
+    });
   }
 
   Future<void> _fetchDailyData(String token) async {
     setState(() {
       isLoading = true;
       errorMessage = null;
+      useMockData = false;
     });
     
     try {
       final dateString = DateFormat('yyyy-MM-dd').format(selectedDate);
       
-      // Fetch activity summary data
-      await _fetchActivityData(token, dateString);
+      try {
+        // Fetch activity summary data
+        await _fetchActivityData(token, dateString);
+      } catch (e) {
+        print('Error fetching activity data: $e');
+        // Use mock data for this section
+        setState(() {
+          fitbitData = MockDataProvider.getMockStepsData();
+          useMockData = true;
+        });
+      }
       
-      // Fetch heart rate data
-      await _fetchHeartRateData(token, dateString);
+      try {
+        // Fetch heart rate data
+        await _fetchHeartRateData(token, dateString);
+      } catch (e) {
+        print('Error fetching heart rate data: $e');
+        // Use mock data for this section
+        setState(() {
+          heartRateData = MockDataProvider.getMockHeartRateData();
+          heartRateChartData = MockDataProvider.getMockHeartRateChartData(24);
+          useMockData = true;
+        });
+      }
       
-      // Fetch sleep data
-      await _fetchSleepData(token, dateString);
+      try {
+        // Fetch sleep data
+        await _fetchSleepData(token, dateString);
+      } catch (e) {
+        print('Error fetching sleep data: $e');
+        // Use mock data for this section
+        setState(() {
+          sleepData = MockDataProvider.getMockSleepData();
+          sleepChartData = MockDataProvider.getMockSleepPieChartData();
+          useMockData = true;
+        });
+      }
       
-      // Fetch exercise data
-      await _fetchExerciseData(token, dateString);
+      try {
+        // Fetch exercise data
+        await _fetchExerciseData(token, dateString);
+      } catch (e) {
+        print('Error fetching exercise data: $e');
+        // Use mock data for this section
+        setState(() {
+          exerciseData = MockDataProvider.getMockExerciseData();
+          useMockData = true;
+        });
+      }
       
       setState(() {
         isLoading = false;
+        if (useMockData) {
+          errorMessage = 'Some data could not be fetched and is being simulated.';
+        }
       });
     } catch (e) {
-      setState(() {
-        isLoading = false;
-        errorMessage = 'Error fetching data: $e';
-      });
+      // If overall process fails, use complete mock data
+      _useMockData('Error fetching data from Fitbit API: $e');
     }
   }
 
   Future<void> _fetchActivityData(String token, String dateString) async {
     try {
-      // Fetch steps data
-      final stepsResponse = await http.get(
-        Uri.parse('https://api.fitbit.com/1/user/-/activities/steps/date/$dateString/1d.json'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
+      final apis = [
+        'activities/steps',
+        'activities/calories',
+        'activities/minutesVeryActive',
+        'activities/distance',
+        'activities/floors',
+        'activities/minutesSedentary'
+      ];
+      
+      final responses = await Future.wait(
+        apis.map((api) => http.get(
+          Uri.parse('https://api.fitbit.com/1/user/-/$api/date/$dateString/1d.json'),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Accept': 'application/json',
+          },
+        )),
       );
       
-      // Fetch calories data
-      final caloriesResponse = await http.get(
-        Uri.parse('https://api.fitbit.com/1/user/-/activities/calories/date/$dateString/1d.json'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
-      );
-      
-      // Fetch active minutes data
-      final activeMinutesResponse = await http.get(
-        Uri.parse('https://api.fitbit.com/1/user/-/activities/minutesVeryActive/date/$dateString/1d.json'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
-      );
-      
-      // Fetch distance data
-      final distanceResponse = await http.get(
-        Uri.parse('https://api.fitbit.com/1/user/-/activities/distance/date/$dateString/1d.json'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
-      );
-      
-      // Fetch floors data
-      final floorsResponse = await http.get(
-        Uri.parse('https://api.fitbit.com/1/user/-/activities/floors/date/$dateString/1d.json'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
-      );
-      
-      // Fetch sedentary minutes data
-      final sedentaryResponse = await http.get(
-        Uri.parse('https://api.fitbit.com/1/user/-/activities/minutesSedentary/date/$dateString/1d.json'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
-      );
-      
-      if (stepsResponse.statusCode == 200 && 
-          caloriesResponse.statusCode == 200 &&
-          activeMinutesResponse.statusCode == 200 &&
-          distanceResponse.statusCode == 200 &&
-          floorsResponse.statusCode == 200 &&
-          sedentaryResponse.statusCode == 200) {
-        
-        final stepsData = json.decode(stepsResponse.body);
-        final caloriesData = json.decode(caloriesResponse.body);
-        final activeMinutesData = json.decode(activeMinutesResponse.body);
-        final distanceData = json.decode(distanceResponse.body);
-        final floorsData = json.decode(floorsResponse.body);
-        final sedentaryData = json.decode(sedentaryResponse.body);
-        
-        setState(() {
-          fitbitData = {
-            'steps': stepsData['activities-steps'][0]['value'],
-            'caloriesBurned': caloriesData['activities-calories'][0]['value'],
-            'activeMinutes': activeMinutesData['activities-minutesVeryActive'][0]['value'],
-            'distance': distanceData['activities-distance'][0]['value'],
-            'floors': floorsData['activities-floors'][0]['value'],
-            'stationaryMinutes': sedentaryData['activities-minutesSedentary'][0]['value'],
-          };
-        });
-      } else if (stepsResponse.statusCode == 401 || 
-                caloriesResponse.statusCode == 401 ||
-                activeMinutesResponse.statusCode == 401 ||
-                distanceResponse.statusCode == 401) {
-        // Handle authentication error
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove('fitbit_token');
-        
-        throw Exception('Authentication expired. Please reconnect your Fitbit.');
-      } else {
-        throw Exception('Failed to load activity data. Please try again later.');
+      // Check if any response has failed
+      for (final response in responses) {
+        if (response.statusCode == 401) {
+          // Handle authentication error
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove('fitbit_token');
+          throw Exception('Authentication expired. Please reconnect your Fitbit.');
+        } else if (response.statusCode != 200) {
+          throw Exception('Failed to load activity data. Status: ${response.statusCode}');
+        }
       }
+      
+      // Parse responses
+      final stepsData = json.decode(responses[0].body);
+      final caloriesData = json.decode(responses[1].body);
+      final activeMinutesData = json.decode(responses[2].body);
+      final distanceData = json.decode(responses[3].body);
+      final floorsData = json.decode(responses[4].body);
+      final sedentaryData = json.decode(responses[5].body);
+      
+      setState(() {
+        fitbitData = {
+          'steps': stepsData['activities-steps'][0]['value'],
+          'caloriesBurned': caloriesData['activities-calories'][0]['value'],
+          'activeMinutes': activeMinutesData['activities-minutesVeryActive'][0]['value'],
+          'distance': distanceData['activities-distance'][0]['value'],
+          'floors': floorsData['activities-floors'][0]['value'],
+          'stationaryMinutes': sedentaryData['activities-minutesSedentary'][0]['value'],
+        };
+      });
     } catch (e) {
       print('Error in _fetchActivityData: $e');
-      // Will be handled by the caller
-      rethrow;
+      // Fall back to mock data for this section
+      setState(() {
+        fitbitData = MockDataProvider.getMockStepsData();
+        useMockData = true;
+      });
+      
+      // Re-throw to be handled by the caller if needed
+      throw e;
     }
   }
   
@@ -286,27 +315,29 @@ class _DailyReportPageState extends State<DailyReportPage> {
               if (dataPoint.containsKey('time') && dataPoint.containsKey('value')) {
                 // Parse time string and create DateTime
                 final timeString = dataPoint['time'];
-                final timeParts = timeString.split(':');
-                if (timeParts.length >= 2) {
-                  final hour = int.parse(timeParts[0]);
-                  final minute = int.parse(timeParts[1]);
-                  
-                  final dateTime = DateTime(
-                    selectedDate.year,
-                    selectedDate.month,
-                    selectedDate.day,
-                    hour,
-                    minute,
-                  );
-                  
-                  timeSeriesData.add({
-                    'time': dateTime,
-                    'value': dataPoint['value'],
-                  });
-                  
-                  // Add data point for the chart
-                  flSpots.add(FlSpot(index.toDouble(), dataPoint['value'].toDouble()));
-                  index++;
+                if (timeString != null && timeString.isNotEmpty) {
+                  final timeParts = timeString.split(':');
+                  if (timeParts.length >= 2) {
+                    final hour = int.parse(timeParts[0]);
+                    final minute = int.parse(timeParts[1]);
+                    
+                    final dateTime = DateTime(
+                      selectedDate.year,
+                      selectedDate.month,
+                      selectedDate.day,
+                      hour,
+                      minute,
+                    );
+                    
+                    timeSeriesData.add({
+                      'time': dateTime,
+                      'value': dataPoint['value'],
+                    });
+                    
+                    // Add data point for the chart
+                    flSpots.add(FlSpot(index.toDouble(), dataPoint['value'].toDouble()));
+                    index++;
+                  }
                 }
               }
             }
@@ -322,15 +353,34 @@ class _DailyReportPageState extends State<DailyReportPage> {
             
             if (flSpots.isNotEmpty) {
               heartRateChartData = flSpots;
+            } else {
+              // If no intraday data, use mock chart data
+              heartRateChartData = MockDataProvider.getMockHeartRateChartData(24);
+              useMockData = true;
             }
           });
+        } else {
+          throw Exception('No heart rate data available');
         }
       } else if (hrResponse.statusCode == 401) {
-        throw Exception('Authentication expired');
+        // Handle authentication error
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('fitbit_token');
+        throw Exception('Authentication expired. Please reconnect your Fitbit.');
+      } else {
+        throw Exception('Failed to load heart rate data. Status: ${hrResponse.statusCode}');
       }
     } catch (e) {
       print('Error fetching heart rate data: $e');
-      // Non-fatal, continue with other data
+      // Fall back to mock data for this section
+      setState(() {
+        heartRateData = MockDataProvider.getMockHeartRateData();
+        heartRateChartData = MockDataProvider.getMockHeartRateChartData(24);
+        useMockData = true;
+      });
+      
+      // Re-throw to be handled by the caller
+      throw e;
     }
   }
   
@@ -411,6 +461,7 @@ class _DailyReportPageState extends State<DailyReportPage> {
               formattedStartTime = DateFormat('h:mm a').format(startDateTime);
             } catch (e) {
               print('Error parsing sleep start time: $e');
+              formattedStartTime = 'N/A';
             }
           }
           
@@ -420,6 +471,7 @@ class _DailyReportPageState extends State<DailyReportPage> {
               formattedEndTime = DateFormat('h:mm a').format(endDateTime);
             } catch (e) {
               print('Error parsing sleep end time: $e');
+              formattedEndTime = 'N/A';
             }
           }
           
@@ -475,6 +527,12 @@ class _DailyReportPageState extends State<DailyReportPage> {
                 sleepChartData = sections;
               });
             }
+          } else {
+            // If no sleep phase data, use mock data
+            setState(() {
+              sleepChartData = MockDataProvider.getMockSleepPieChartData();
+              useMockData = true;
+            });
           }
           
           setState(() {
@@ -489,11 +547,35 @@ class _DailyReportPageState extends State<DailyReportPage> {
               'endTime': formattedEndTime,
             };
           });
+        } else {
+          // No sleep data for this day
+          setState(() {
+            // Use mock data when no real data is available
+            sleepData = MockDataProvider.getMockSleepData();
+            sleepChartData = MockDataProvider.getMockSleepPieChartData();
+            useMockData = true;
+          });
+          throw Exception('No sleep data available for this date');
         }
+      } else if (sleepResponse.statusCode == 401) {
+        // Handle authentication error
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('fitbit_token');
+        throw Exception('Authentication expired. Please reconnect your Fitbit.');
+      } else {
+        throw Exception('Failed to load sleep data. Status: ${sleepResponse.statusCode}');
       }
     } catch (e) {
       print('Error fetching sleep data: $e');
-      // Non-fatal, continue with other data
+      // Use mock data for sleep section
+      setState(() {
+        sleepData = MockDataProvider.getMockSleepData();
+        sleepChartData = MockDataProvider.getMockSleepPieChartData();
+        useMockData = true;
+      });
+      
+      // Re-throw to be handled by the caller
+      throw e;
     }
   }
   
@@ -516,25 +598,26 @@ class _DailyReportPageState extends State<DailyReportPage> {
           
           for (var activity in data['activities']) {
             // Filter for activities on the selected date
-            final activityDate = activity['startTime'] != null 
-                ? DateTime.parse(activity['startTime']) 
-                : null;
+            final String? startTimeStr = activity['startTime'];
+            // Add null check for startTime
+            if (startTimeStr != null && startTimeStr.isNotEmpty) {
+              final DateTime activityDate = DateTime.parse(startTimeStr);
+              
+              if (activityDate.year == selectedDate.year &&
+                  activityDate.month == selectedDate.month && 
+                  activityDate.day == selectedDate.day) {
                 
-            if (activityDate != null && 
-                activityDate.year == selectedDate.year &&
-                activityDate.month == selectedDate.month && 
-                activityDate.day == selectedDate.day) {
-                
-              exercises.add({
-                'name': activity['activityName'] ?? 'Unknown activity',
-                'duration': activity['duration'] != null 
-                    ? (activity['duration'] / 60000).round() // Convert from milliseconds to minutes
-                    : 0,
-                'calories': activity['calories'] ?? 0,
-                'steps': activity['steps'] ?? 0,
-                'distance': activity['distance'] ?? 0,
-                'startTime': activityDate,
-              });
+                exercises.add({
+                  'name': activity['activityName'] ?? 'Unknown activity',
+                  'duration': activity['duration'] != null 
+                      ? (activity['duration'] / 60000).round() // Convert from milliseconds to minutes
+                      : 0,
+                  'calories': activity['calories'] ?? 0,
+                  'steps': activity['steps'] ?? 0,
+                  'distance': activity['distance'] ?? 0,
+                  'startTime': activityDate,
+                });
+              }
             }
           }
           
@@ -545,11 +628,35 @@ class _DailyReportPageState extends State<DailyReportPage> {
           setState(() {
             exerciseData = exercises;
           });
+          
+          // If no exercises for today, use mock data
+          if (exercises.isEmpty) {
+            setState(() {
+              exerciseData = MockDataProvider.getMockExerciseData();
+              useMockData = true;
+            });
+          }
+        } else {
+          throw Exception('No exercise data available');
         }
+      } else if (exerciseResponse.statusCode == 401) {
+        // Handle authentication error
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('fitbit_token');
+        throw Exception('Authentication expired. Please reconnect your Fitbit.');
+      } else {
+        throw Exception('Failed to load exercise data. Status: ${exerciseResponse.statusCode}');
       }
     } catch (e) {
       print('Error fetching exercise data: $e');
-      // Non-fatal, continue with other data
+      // Use mock data for exercise section
+      setState(() {
+        exerciseData = MockDataProvider.getMockExerciseData();
+        useMockData = true;
+      });
+      
+      // Re-throw to be handled by the caller
+      throw e;
     }
   }
   
@@ -558,348 +665,381 @@ class _DailyReportPageState extends State<DailyReportPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Daily Report'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.calendar_today),
+            onPressed: () async {
+              final selectedDateTime = await showDatePicker(
+                context: context,
+                initialDate: selectedDate,
+                firstDate: DateTime.now().subtract(const Duration(days: 30)),
+                lastDate: DateTime.now(),
+              );
+              
+              if (selectedDateTime != null) {
+                setState(() {
+                  selectedDate = selectedDateTime;
+                });
+                
+                if (accessToken != null) {
+                  _fetchDailyData(accessToken!);
+                } else {
+                  _useMockData('No Fitbit connection. Showing sample data for selected date.');
+                }
+              }
+            },
+            tooltip: 'Change Date',
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () {
+              if (accessToken != null) {
+                _fetchDailyData(accessToken!);
+              } else {
+                _useMockData('No Fitbit connection. Showing sample data.');
+              }
+            },
+            tooltip: 'Refresh Data',
+          ),
+        ],
       ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
-          : errorMessage != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.error_outline, 
-                          size: 48, 
-                          color: Colors.red,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          errorMessage!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(fontSize: 16),
-                        ),
-                        const SizedBox(height: 24),
-                        ElevatedButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                          },
-                          child: const Text('Go Back'),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              : SingleChildScrollView(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Date header
-                      Card(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.calendar_today, color: Colors.blue),
-                              const SizedBox(width: 12),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'Daily Report',
-                                    style: TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  Text(
-                                    DateFormat('EEEE, MMMM d, yyyy').format(selectedDate),
-                                    style: TextStyle(
-                                      color: Colors.grey.shade700,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Show info message if using mock data
+                  if (useMockData && errorMessage != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(8.0),
+                      margin: const EdgeInsets.only(bottom: 16.0),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.amber.shade200),
                       ),
-                      
-                      const SizedBox(height: 16),
-                      
-                      // Activity summary card
-                      Card(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, color: Colors.amber.shade800),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              errorMessage!,
+                              style: TextStyle(color: Colors.amber.shade800),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  
+                  // Date header
+                  Card(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.calendar_today, color: Colors.blue),
+                          const SizedBox(width: 12),
+                          Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const Text(
-                                'Activity Summary',
+                                'Daily Report',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                DateFormat('EEEE, MMMM d, yyyy').format(selectedDate),
+                                style: TextStyle(
+                                  color: Colors.grey.shade700,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Activity summary card
+                  Card(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Activity Summary',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          
+                          _buildActivityMetric(Icons.directions_walk, 'Steps', fitbitData['steps']),
+                          _buildActivityMetric(Icons.local_fire_department, 'Calories Burned', '${fitbitData['caloriesBurned']} cal'),
+                          _buildActivityMetric(Icons.timer, 'Active Minutes', '${fitbitData['activeMinutes']} min'),
+                          _buildActivityMetric(Icons.straighten, 'Distance', '${fitbitData['distance']} km'),
+                          _buildActivityMetric(Icons.stairs, 'Floors', fitbitData['floors']),
+                          _buildActivityMetric(Icons.airline_seat_recline_normal, 'Stationary Time', '${fitbitData['stationaryMinutes']} min'),
+                        ],
+                      ),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Heart rate card
+                  Card(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Heart Rate',
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              const SizedBox(height: 16),
-                              
-                              _buildActivityMetric(Icons.directions_walk, 'Steps', fitbitData['steps']),
-                              _buildActivityMetric(Icons.local_fire_department, 'Calories Burned', '${fitbitData['caloriesBurned']} cal'),
-                              _buildActivityMetric(Icons.timer, 'Active Minutes', '${fitbitData['activeMinutes']} min'),
-                              _buildActivityMetric(Icons.straighten, 'Distance', '${fitbitData['distance']} km'),
-                              _buildActivityMetric(Icons.stairs, 'Floors', fitbitData['floors']),
-                              _buildActivityMetric(Icons.airline_seat_recline_normal, 'Stationary Time', '${fitbitData['stationaryMinutes']} min'),
+                              IconButton(
+                                icon: Icon(
+                                  showHeartRateChart ? Icons.expand_less : Icons.expand_more,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    showHeartRateChart = !showHeartRateChart;
+                                  });
+                                },
+                              ),
                             ],
                           ),
-                        ),
-                      ),
-                      
-                      const SizedBox(height: 16),
-                      
-                      // Heart rate card
-                      Card(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          const SizedBox(height: 16),
+                          
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
                             children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text(
-                                    'Heart Rate',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  IconButton(
-                                    icon: Icon(
-                                      showHeartRateChart ? Icons.expand_less : Icons.expand_more,
-                                    ),
-                                    onPressed: () {
-                                      setState(() {
-                                        showHeartRateChart = !showHeartRateChart;
-                                      });
-                                    },
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 16),
-                              
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                                children: [
-                                  _buildHeartRateValue('Resting', heartRateData['restingHR']),
-                                  _buildHeartRateValue('Min', heartRateData['minHR']),
-                                  _buildHeartRateValue('Max', heartRateData['maxHR']),
-                                ],
-                              ),
-                              
-                              if (showHeartRateChart && heartRateChartData.isNotEmpty) ...[
-                                const SizedBox(height: 24),
-                                const Text(
-                                  'Heart Rate Throughout Day',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                SizedBox(
-                                  height: 200,
-                                  child: LineChart(
-                                    LineChartData(
-                                      gridData: FlGridData(
-                                        show: true,
-                                        drawHorizontalLine: true,
-                                        drawVerticalLine: false,
-                                      ),
-                                      titlesData: FlTitlesData(
-                                        bottomTitles: AxisTitles(
-                                          sideTitles: SideTitles(
-                                            showTitles: false,
-                                          ),
-                                        ),
-                                        leftTitles: AxisTitles(
-                                          sideTitles: SideTitles(
-                                            showTitles: true,
-                                            interval: 20,
-                                            reservedSize: 30,
-                                          ),
-                                        ),
-                                        rightTitles: AxisTitles(
-                                          sideTitles: SideTitles(
-                                            showTitles: false,
-                                          ),
-                                        ),
-                                        topTitles: AxisTitles(
-                                          sideTitles: SideTitles(
-                                            showTitles: false,
-                                          ),
-                                        ),
-                                      ),
-                                      borderData: FlBorderData(
-                                        show: true,
-                                        border: Border.all(
-                                          color: Colors.grey.shade300,
-                                        ),
-                                      ),
-                                      lineBarsData: [
-                                        LineChartBarData(
-                                          spots: heartRateChartData,
-                                          isCurved: true,
-                                          color: Colors.red,
-                                          barWidth: 2,
-                                          dotData: FlDotData(show: false),
-                                          belowBarData: BarAreaData(
-                                            show: true,
-                                            color: Colors.red.withOpacity(0.1),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
+                              _buildHeartRateValue('Resting', heartRateData['restingHR']),
+                              _buildHeartRateValue('Min', heartRateData['minHR']),
+                              _buildHeartRateValue('Max', heartRateData['maxHR']),
                             ],
                           ),
-                        ),
-                      ),
-                      
-                      const SizedBox(height: 16),
-                      
-                      // Sleep card
-                      Card(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text(
-                                    'Sleep',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  IconButton(
-                                    icon: Icon(
-                                      showSleepBreakdown ? Icons.expand_less : Icons.expand_more,
-                                    ),
-                                    onPressed: () {
-                                      setState(() {
-                                        showSleepBreakdown = !showSleepBreakdown;
-                                      });
-                                    },
-                                  ),
-                                ],
+                          
+                          if (showHeartRateChart && heartRateChartData.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            const Text(
+                              'Heart Rate Throughout Day',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                               ),
-                              const SizedBox(height: 16),
-                              
-                              _buildActivityMetric(Icons.hotel, 'Duration', sleepData['duration']),
-                              _buildActivityMetric(Icons.speed, 'Efficiency', sleepData['efficiency']),
-                              _buildActivityMetric(Icons.access_time, 'Bedtime', sleepData['startTime']),
-                              _buildActivityMetric(Icons.wb_sunny, 'Wake Time', sleepData['endTime']),
-                              
-                              if (showSleepBreakdown && sleepChartData.isNotEmpty) ...[
-                                const SizedBox(height: 24),
-                                const Text(
-                                  'Sleep Stages',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              height: 200,
+                              child: LineChart(
+                                LineChartData(
+                                  gridData: FlGridData(
+                                    show: true,
+                                    drawHorizontalLine: true,
+                                    drawVerticalLine: false,
                                   ),
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      flex: 1,
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          _buildSleepStageItem('Deep Sleep', sleepData['deepSleep'], Colors.blue),
-                                          const SizedBox(height: 8),
-                                          _buildSleepStageItem('Light Sleep', sleepData['lightSleep'], Colors.cyan),
-                                          const SizedBox(height: 8),
-                                          _buildSleepStageItem('REM Sleep', sleepData['remSleep'], Colors.green),
-                                          const SizedBox(height: 8),
-                                          _buildSleepStageItem('Awake', sleepData['awakeSleep'], Colors.grey),
-                                        ],
+                                  titlesData: FlTitlesData(
+                                    bottomTitles: AxisTitles(
+                                      sideTitles: SideTitles(
+                                        showTitles: false,
                                       ),
                                     ),
-                                    Expanded(
-                                      flex: 1,
-                                      child: SizedBox(
-                                        height: 200,
-                                        child: PieChart(
-                                          PieChartData(
-                                            sections: sleepChartData,
-                                            centerSpaceRadius: 30,
-                                            sectionsSpace: 2,
-                                          ),
-                                        ),
+                                    leftTitles: AxisTitles(
+                                      sideTitles: SideTitles(
+                                        showTitles: true,
+                                        interval: 20,
+                                        reservedSize: 30,
+                                      ),
+                                    ),
+                                    rightTitles: AxisTitles(
+                                      sideTitles: SideTitles(
+                                        showTitles: false,
+                                      ),
+                                    ),
+                                    topTitles: AxisTitles(
+                                      sideTitles: SideTitles(
+                                        showTitles: false,
+                                      ),
+                                    ),
+                                  ),
+                                  borderData: FlBorderData(
+                                    show: true,
+                                    border: Border.all(
+                                      color: Colors.grey.shade300,
+                                    ),
+                                  ),
+                                  lineBarsData: [
+                                    LineChartBarData(
+                                      spots: heartRateChartData,
+                                      isCurved: true,
+                                      color: Colors.red,
+                                      barWidth: 2,
+                                      dotData: FlDotData(show: false),
+                                      belowBarData: BarAreaData(
+                                        show: true,
+                                        color: Colors.red.withOpacity(0.1),
                                       ),
                                     ),
                                   ],
                                 ),
-                              ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Sleep card
+                  Card(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Sleep',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              IconButton(
+                                icon: Icon(
+                                  showSleepBreakdown ? Icons.expand_less : Icons.expand_more,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    showSleepBreakdown = !showSleepBreakdown;
+                                  });
+                                },
+                              ),
                             ],
                           ),
-                        ),
-                      ),
-                      
-                      const SizedBox(height: 16),
-                      
-                      // Exercise card
-                      if (exerciseData.isNotEmpty) ...[
-                        Card(
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                          const SizedBox(height: 16),
+                          
+                          _buildActivityMetric(Icons.hotel, 'Duration', sleepData['duration']),
+                          _buildActivityMetric(Icons.speed, 'Efficiency', sleepData['efficiency']),
+                          _buildActivityMetric(Icons.access_time, 'Bedtime', sleepData['startTime']),
+                          _buildActivityMetric(Icons.wb_sunny, 'Wake Time', sleepData['endTime']),
+                          
+                          if (showSleepBreakdown && sleepChartData.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            const Text(
+                              'Sleep Stages',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
                               children: [
-                                const Text(
-                                  'Exercises',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
+                                Expanded(
+                                  flex: 1,
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      _buildSleepStageItem('Deep Sleep', sleepData['deepSleep'], Colors.blue),
+                                      const SizedBox(height: 8),
+                                      _buildSleepStageItem('Light Sleep', sleepData['lightSleep'], Colors.cyan),
+                                      const SizedBox(height: 8),
+                                      _buildSleepStageItem('REM Sleep', sleepData['remSleep'], Colors.green),
+                                      const SizedBox(height: 8),
+                                      _buildSleepStageItem('Awake', sleepData['awakeSleep'], Colors.grey),
+                                    ],
                                   ),
                                 ),
-                                const SizedBox(height: 16),
-                                
-                                ...exerciseData.map((exercise) => _buildExerciseItem(exercise)).toList(),
+                                Expanded(
+                                  flex: 1,
+                                  child: SizedBox(
+                                    height: 200,
+                                    child: PieChart(
+                                      PieChartData(
+                                        sections: sleepChartData,
+                                        centerSpaceRadius: 30,
+                                        sectionsSpace: 2,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ],
                             ),
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 16),
-                      ],
-                    ],
+                          ],
+                        ],
+                      ),
+                    ),
                   ),
-                ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Exercise card
+                  if (exerciseData.isNotEmpty) ...[
+                    Card(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Exercises',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            
+                            ...exerciseData.map((exercise) => _buildExerciseItem(exercise)).toList(),
+                          ],
+                        ),
+                      ),
+                    ),
+                    
+                    const SizedBox(height: 16),
+                  ],
+                ],
+              ),
+            ),
     );
   }
   
@@ -1031,11 +1171,11 @@ class _DailyReportPageState extends State<DailyReportPage> {
                       color: Colors.grey.shade700,
                     ),
                   ),
-                Text(
-                  'Time: ${DateFormat('h:mm a').format(exercise['startTime'])}',
-                  style: TextStyle(
-                    color: Colors.grey.shade700,
-                  ),
+                    Text(
+                    'Time: ${exercise['startTime'] != null ? DateFormat('h:mm a').format(exercise['startTime']) : 'N/A'}',
+                    style: TextStyle(
+                        color: Colors.grey.shade700,
+                    ),
                 ),
               ],
             ),

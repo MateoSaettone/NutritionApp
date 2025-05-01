@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:ui' as ui;
+import 'mock_data_provider.dart'; // Import mock data provider
 
 class WeeklySummaryPage extends StatefulWidget {
   const WeeklySummaryPage({Key? key}) : super(key: key);
@@ -22,6 +23,8 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
   
   bool isLoading = true;
   String? errorMessage;
+  bool useMockData = false;
+  String? accessToken;
   
   // Weekly data containers
   List<int> dailySteps = List.filled(7, 0);
@@ -64,6 +67,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
     setState(() {
       isLoading = true;
       errorMessage = null;
+      useMockData = false;
     });
     
     try {
@@ -71,13 +75,29 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('fitbit_token');
       
-      // If Fitbit is connected, load step data
+      setState(() {
+        accessToken = token;
+      });
+      
+      // If Fitbit is connected, try to load step data
       if (token != null) {
-        await _fetchFitbitWeeklyData(token);
+        try {
+          await _fetchFitbitWeeklyData(token);
+        } catch (e) {
+          print('Error fetching Fitbit data: $e');
+          _useMockStepData('Error connecting to Fitbit: $e');
+        }
+      } else {
+        _useMockStepData('No Fitbit connection available');
       }
       
-      // Load survey data from Firestore
-      await _fetchSurveyData();
+      // Load survey data from Firestore regardless of Fitbit connection
+      try {
+        await _fetchSurveyData();
+      } catch (e) {
+        print('Error fetching survey data: $e');
+        _useMockSurveyData('Error loading survey data: $e');
+      }
       
       // Calculate weekly averages
       _calculateWeeklyAverages();
@@ -86,11 +106,60 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
         isLoading = false;
       });
     } catch (e) {
-      setState(() {
-        isLoading = false;
-        errorMessage = 'Error loading weekly data: $e';
-      });
+      _useAllMockData('Error loading weekly data: $e');
     }
+  }
+  
+  void _useMockStepData(String message) {
+    setState(() {
+      useMockData = true;
+      final mockData = MockDataProvider.getMockWeeklySummaryData();
+      dailySteps = List<int>.from(mockData['dailySteps']);
+      totalSteps = mockData['totalSteps'];
+      avgSteps = mockData['avgSteps'];
+      
+      // Append message to existing error or set new one
+      if (errorMessage != null) {
+        errorMessage = '$errorMessage\n$message';
+      } else {
+        errorMessage = message;
+      }
+    });
+  }
+  
+  void _useMockSurveyData(String message) {
+    setState(() {
+      useMockData = true;
+      final mockData = MockDataProvider.getMockWeeklySummaryData();
+      dailyMoodRatings = List<double>.from(mockData['dailyMoodRatings']);
+      dailyEnergyLevels = List<double>.from(mockData['dailyEnergyLevels']);
+      weeklyAvgMood = mockData['weeklyAvgMood'];
+      weeklyAvgEnergy = mockData['weeklyAvgEnergy'];
+      
+      // Append message to existing error or set new one
+      if (errorMessage != null) {
+        errorMessage = '$errorMessage\n$message';
+      } else {
+        errorMessage = message;
+      }
+    });
+  }
+  
+  void _useAllMockData(String message) {
+    setState(() {
+      isLoading = false;
+      useMockData = true;
+      errorMessage = message;
+      
+      final mockData = MockDataProvider.getMockWeeklySummaryData();
+      dailySteps = List<int>.from(mockData['dailySteps']);
+      dailyMoodRatings = List<double>.from(mockData['dailyMoodRatings']);
+      dailyEnergyLevels = List<double>.from(mockData['dailyEnergyLevels']);
+      weeklyAvgMood = mockData['weeklyAvgMood'];
+      weeklyAvgEnergy = mockData['weeklyAvgEnergy'];
+      totalSteps = mockData['totalSteps'];
+      avgSteps = mockData['avgSteps'];
+    });
   }
   
   Future<void> _fetchFitbitWeeklyData(String token) async {
@@ -112,17 +181,23 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
         final data = json.decode(stepsResponse.body);
         final stepsData = data['activities-steps'] as List;
         
+        // Reset daily steps array
+        dailySteps = List.filled(7, 0);
+        
         // Process steps data for each day
         for (int i = 0; i < 7 && i < stepsData.length; i++) {
           final dayData = stepsData[i];
-          final dayDateStr = dayData['dateTime'];
-          final dayDate = DateFormat('yyyy-MM-dd').parse(dayDateStr);
+          final dayDateStr = dayData['dateTime'] as String?;
           
-          // Calculate the day index (0 = Sunday, 6 = Saturday)
-          final dayIndex = dayDate.difference(startOfWeek).inDays;
-          
-          if (dayIndex >= 0 && dayIndex < 7) {
-            dailySteps[dayIndex] = int.tryParse(dayData['value'].toString()) ?? 0;
+          if (dayDateStr != null && dayDateStr.isNotEmpty) {
+            final dayDate = DateFormat('yyyy-MM-dd').parse(dayDateStr);
+            
+            // Calculate the day index (0 = Sunday, 6 = Saturday)
+            final dayIndex = dayDate.difference(startOfWeek).inDays;
+            
+            if (dayIndex >= 0 && dayIndex < 7) {
+              dailySteps[dayIndex] = int.tryParse(dayData['value'].toString()) ?? 0;
+            }
           }
         }
       } else if (stepsResponse.statusCode == 401) {
@@ -134,6 +209,7 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
         throw Exception('Failed to load Fitbit data: ${stepsResponse.statusCode}');
       }
     } catch (e) {
+      // Re-throw for the caller to handle
       throw Exception('Error fetching Fitbit data: $e');
     }
   }
@@ -167,31 +243,44 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
       // Process survey data
       for (final survey in surveys.docs) {
         final data = survey.data();
-        final dateStr = data['date'] as String;
-        final date = DateFormat('yyyy-MM-dd').parse(dateStr);
-        
-        // Calculate the day index (0 = Sunday, 6 = Saturday)
-        final dayIndex = date.difference(startOfWeek).inDays;
-        
-        if (dayIndex >= 0 && dayIndex < 7) {
-          if (data.containsKey('moodRating')) {
-            dailyMoodRatings[dayIndex] = (data['moodRating'] as num).toDouble();
-            hasMoodData[dayIndex] = true;
-          }
-          
-          if (data.containsKey('energyLevel')) {
-            dailyEnergyLevels[dayIndex] = (data['energyLevel'] as num).toDouble();
-            hasEnergyData[dayIndex] = true;
+        final String? dateStr = data['date'] as String?;
+        if (dateStr != null && dateStr.isNotEmpty) {
+          final date = DateFormat('yyyy-MM-dd').parse(dateStr);
+          final dayIndex = date.difference(startOfWeek).inDays;
+          if (dayIndex >= 0 && dayIndex < 7) {
+            if (data.containsKey('moodRating')) {
+              dailyMoodRatings[dayIndex] = (data['moodRating'] as num).toDouble();
+              hasMoodData[dayIndex] = true;
+            }
+            if (data.containsKey('energyLevel')) {
+              dailyEnergyLevels[dayIndex] = (data['energyLevel'] as num).toDouble();
+              hasEnergyData[dayIndex] = true;
+            }
           }
         }
       }
       
-      // Fill missing days with zero
-      for (int i = 0; i < 7; i++) {
-        if (!hasMoodData[i]) dailyMoodRatings[i] = 0;
-        if (!hasEnergyData[i]) dailyEnergyLevels[i] = 0;
+      // Check if we have any real survey data
+      final hasSomeRealMoodData = hasMoodData.any((has) => has);
+      final hasSomeRealEnergyData = hasEnergyData.any((has) => has);
+      
+      // If we have no survey data at all, use mock data
+      if (!hasSomeRealMoodData && !hasSomeRealEnergyData) {
+        final mockData = MockDataProvider.getMockWeeklySummaryData();
+        dailyMoodRatings = List<double>.from(mockData['dailyMoodRatings']);
+        dailyEnergyLevels = List<double>.from(mockData['dailyEnergyLevels']);
+        
+        // Mark as using some mock data, but don't override other real data
+        setState(() {
+          useMockData = true;
+          // Only add error message if not already set
+          if (errorMessage == null) {
+            errorMessage = 'No survey data available for this week. Showing sample mood and energy data.';
+          }
+        });
       }
     } catch (e) {
+      // Re-throw for the caller to handle
       throw Exception('Error fetching survey data: $e');
     }
   }
@@ -251,31 +340,9 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                 ],
               ),
             )
-          : errorMessage != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.error_outline,
-                        size: 48,
-                        color: Colors.red.shade700,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        errorMessage!,
-                        style: TextStyle(color: Colors.red.shade700),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 24),
-                      ElevatedButton(
-                        onPressed: _refreshData,
-                        child: const Text('Try Again'),
-                      ),
-                    ],
-                  ),
-                )
-              : RefreshIndicator(
+          : errorMessage != null && useMockData
+              // Show data with warning banner
+              ? RefreshIndicator(
                   onRefresh: _refreshData,
                   child: SingleChildScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -283,211 +350,277 @@ class _WeeklySummaryPageState extends State<WeeklySummaryPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Date range header
-                        Card(
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                        // Warning banner
+                        Container(
+                          padding: const EdgeInsets.all(8.0),
+                          margin: const EdgeInsets.only(bottom: 16.0),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.amber.shade200),
                           ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              children: [
-                                Row(
-                                  children: [
-                                    Icon(Icons.calendar_today, color: Colors.blue),
-                                    const SizedBox(width: 12),
-                                    Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          'Weekly Summary',
-                                          style: TextStyle(
-                                            fontSize: 20,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        Text(
-                                          '${DateFormat('MMM d').format(startOfWeek)} - ${DateFormat('MMM d').format(endOfWeek)}',
-                                          style: TextStyle(
-                                            color: Colors.grey.shade700,
-                                            fontSize: 16,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
+                          child: Row(
+                            children: [
+                              Icon(Icons.info_outline, color: Colors.amber.shade800),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  errorMessage!,
+                                  style: TextStyle(color: Colors.amber.shade800),
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
-                        
-                        const SizedBox(height: 24),
-                        
-                        // Weekly activity summary
-                        Card(
-                          elevation: 3,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Weekly Activity Overview',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                                
-                                // Summary metrics
-                                _buildSummaryMetric(
-                                  Icons.directions_walk,
-                                  'Total Steps',
-                                  NumberFormat('#,###').format(totalSteps),
-                                ),
-                                const Divider(),
-                                _buildSummaryMetric(
-                                  Icons.show_chart,
-                                  'Daily Average Steps',
-                                  NumberFormat('#,###').format(avgSteps.round()),
-                                ),
-                                const Divider(),
-                                _buildSummaryMetric(
-                                  Icons.mood,
-                                  'Average Mood Rating',
-                                  weeklyAvgMood > 0 
-                                      ? '${weeklyAvgMood.toStringAsFixed(1)}/10' 
-                                      : 'No data',
-                                ),
-                                const Divider(),
-                                _buildSummaryMetric(
-                                  Icons.battery_charging_full,
-                                  'Average Energy Level',
-                                  weeklyAvgEnergy > 0 
-                                      ? '${weeklyAvgEnergy.toStringAsFixed(1)}/10' 
-                                      : 'No data',
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 24),
-                        
-                        // Steps chart
-                        Card(
-                          elevation: 3,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Daily Steps',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 24),
-                                SizedBox(
-                                  height: 200,
-                                  child: _buildStepsBarChart(),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 24),
-                        
-                        // Mood & Energy chart
-                        Card(
-                          elevation: 3,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Mood & Energy Levels',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 24),
-                                SizedBox(
-                                  height: 200,
-                                  child: _buildMoodEnergyChart(),
-                                ),
-                                const SizedBox(height: 16),
-                                
-                                // Legend
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.circle, color: Colors.blue, size: 12),
-                                    const SizedBox(width: 4),
-                                    const Text('Mood'),
-                                    const SizedBox(width: 24),
-                                    Icon(Icons.circle, color: Colors.orange, size: 12),
-                                    const SizedBox(width: 4),
-                                    const Text('Energy'),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 24),
-                        
-                        // Insights and Recommendations
-                        Card(
-                          elevation: 3,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Insights & Recommendations',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                                
-                                // Generate some basic insights based on the data
-                                ..._generateInsights(),
-                              ],
-                            ),
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 24),
+                        // Regular content continues below
+                        ..._buildSummaryContent(),
                       ],
                     ),
                   ),
-                ),
+                )
+              : errorMessage != null
+                  // Show error with retry button
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.error_outline,
+                            size: 48,
+                            color: Colors.red.shade700,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            errorMessage!,
+                            style: TextStyle(color: Colors.red.shade700),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 24),
+                          ElevatedButton(
+                            onPressed: _refreshData,
+                            child: const Text('Try Again'),
+                          ),
+                        ],
+                      ),
+                    )
+                  // Show regular content
+                  : RefreshIndicator(
+                      onRefresh: _refreshData,
+                      child: SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: _buildSummaryContent(),
+                        ),
+                      ),
+                    ),
     );
+  }
+  
+  List<Widget> _buildSummaryContent() {
+    return [
+      // Date range header
+      Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.calendar_today, color: Colors.blue),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Weekly Summary',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        '${DateFormat('MMM d').format(startOfWeek)} - ${DateFormat('MMM d').format(endOfWeek)}',
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      
+      const SizedBox(height: 24),
+      
+      // Weekly activity summary
+      Card(
+        elevation: 3,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Weekly Activity Overview',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+              
+              // Summary metrics
+              _buildSummaryMetric(
+                Icons.directions_walk,
+                'Total Steps',
+                NumberFormat('#,###').format(totalSteps),
+              ),
+              const Divider(),
+              _buildSummaryMetric(
+                Icons.show_chart,
+                'Daily Average Steps',
+                NumberFormat('#,###').format(avgSteps.round()),
+              ),
+              const Divider(),
+              _buildSummaryMetric(
+                Icons.mood,
+                'Average Mood Rating',
+                weeklyAvgMood > 0 
+                    ? '${weeklyAvgMood.toStringAsFixed(1)}/10' 
+                    : 'No data',
+              ),
+              const Divider(),
+              _buildSummaryMetric(
+                Icons.battery_charging_full,
+                'Average Energy Level',
+                weeklyAvgEnergy > 0 
+                    ? '${weeklyAvgEnergy.toStringAsFixed(1)}/10' 
+                    : 'No data',
+              ),
+            ],
+          ),
+        ),
+      ),
+      
+      const SizedBox(height: 24),
+      
+      // Steps chart
+      Card(
+        elevation: 3,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Daily Steps',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                height: 200,
+                child: _buildStepsBarChart(),
+              ),
+            ],
+          ),
+        ),
+      ),
+      
+      const SizedBox(height: 24),
+      
+      // Mood & Energy chart
+      Card(
+        elevation: 3,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Mood & Energy Levels',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                height: 200,
+                child: _buildMoodEnergyChart(),
+              ),
+              const SizedBox(height: 16),
+              
+              // Legend
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.circle, color: Colors.blue, size: 12),
+                  const SizedBox(width: 4),
+                  const Text('Mood'),
+                  const SizedBox(width: 24),
+                  Icon(Icons.circle, color: Colors.orange, size: 12),
+                  const SizedBox(width: 4),
+                  const Text('Energy'),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      
+      const SizedBox(height: 24),
+      
+      // Insights and Recommendations
+      Card(
+        elevation: 3,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Insights & Recommendations',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+              
+              // Generate some basic insights based on the data
+              ..._generateInsights(),
+            ],
+          ),
+        ),
+      ),
+      
+      const SizedBox(height: 24),
+    ];
   }
   
   Widget _buildSummaryMetric(IconData icon, String label, String value) {
@@ -833,7 +966,7 @@ class LineChartPainter extends CustomPainter {
       final x = i * pointWidth;
       final y = chartHeight + 10;
       
-      // Draw the day label text directly
+      // Draw the day label text
       final dayText = weekDays[i];
       
       // Center text below the point
